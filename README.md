@@ -1,5 +1,12 @@
 # Rust STM32 Ethernet
 
+This repository is currently used for education and experimentation of STM32 Embedded Rust, using the [Embassy Rust Framework](https://embassy.dev/).
+
+Other notable libraries used include:
+* [picoserve HTTP server](https://github.com/sammhicks/picoserve)
+
+The current hardware target is an [ST NUCLEO-F767ZI](https://www.st.com/en/evaluation-tools/nucleo-f767zi.html) development board. 
+
 ## Dependencies
 
 ### Install Rust + cargo
@@ -35,25 +42,13 @@ Chip and Target architecture
 
 Rust library dependencies
 
-### `build`
+## Tools
 
-## Build
+`./build` - Compile the application.
 
-```bash
-clear && cargo build --bin eth3-pserve1 --target thumbv7em-none-eabihf --release
-clear && cargo flash --bin eth3-pserve1 --target thumbv7em-none-eabihf --chip STM32F767ZITx --release
-```
+`./flash` - Compile and flash the application with probe-rs
 
-
-```bash
-clear && cargo +nightly build --bin eth3-pserve1 --target thumbv7em-none-eabihf --release
-clear && cargo +nightly flash --bin eth3-pserve1 --target thumbv7em-none-eabihf --chip STM32F767ZITx --release
-clear && cargo +nightly run --bin eth3-pserve1 --target thumbv7em-none-eabihf --release
-
-
-
-clear && cargo +nightly flash --bin main --target thumbv7em-none-eabihf --chip STM32F767ZITx --release
-```
+`./debug` - Compile, flash, and connnect semihosting to the application with probe-rs
 
 ## Authors
 
