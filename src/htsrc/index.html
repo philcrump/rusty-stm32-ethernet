@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="author" content="Phil Crump M0DNY">
+  <title>Rusty STM32</title>
+  <link rel="stylesheet" href="/index.css">
+  <script defer src="/mithril-2.2.2.min.js"></script>
+  <script defer src="/index.js"></script>
+</head>
+
+<body>
+  <center><h2>Rusty STM32 Demo</h2></center>
+
+  <div id="system-ui">
+    <h4>System Status</h4>
+    <div id="system-data"></div>
+  </div>
+
+  <div id="rawstate-ui">
+    <h4>Raw State (<a href="#" id="toggle-rawstate">show</a>)</h4>
+    <div id="jsonstate-ui"></div>
+  </div>
+
+  <div id="footer">
+    <hr>
+    <pre>
+      © 2024 All Rights Reserved • Phil Crump M0DNY
+    </pre>
+  </div>
+
+  <div id="disconnection-ui" style="display:none;">
+    <div id="disconnection-grayout"></div>
+    <div id="disconnection-modal">
+      <h4>Connection Lost</h4>
+      <p>Connection to the device has been lost. Retrying..</p>
+    </div>
+  </div>
+</body>
+
+</html>

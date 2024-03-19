@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+source_dir="$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)"
+cd $source_dir
+
+./build_htdocs;
+cargo +nightly flash --bin main --chip STM32F767ZITx --release;
