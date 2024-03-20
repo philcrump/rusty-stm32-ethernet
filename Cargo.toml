@@ -31,7 +31,7 @@ embedded-storage = "0.3.1"
 static_cell = { version = "2", features = ["nightly"] }
 
 # Picoserve
-picoserve = { path = "../picoserve", features = ["embassy"] }
+picoserve = { version = "0.10.2", features = ["embassy"] }
 
 [profile.release]
 debug = 2
