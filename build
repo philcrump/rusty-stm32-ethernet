@@ -45,4 +45,4 @@ done
 for i in `seq 2 $OPTIND`; do shift; done
 
 ./build_htdocs;
-cargo +nightly build --bin main --release;
+cargo +nightly build --release;
