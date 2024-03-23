@@ -25,8 +25,6 @@ use embassy_time::{Delay, Timer, Instant};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
-//use heapless::String;
-
 // Picoserve
 use static_cell::make_static;
 //use cortex_m::register::control::Control;
@@ -38,12 +36,18 @@ use picoserve::{
 };
 //use picoserve::extract::State;
 
+// Time
+use embassy_stm32::rtc::{Rtc, RtcConfig};
+use chrono::{NaiveDate, NaiveDateTime};
+//use heapless::String;
+
 
 //GPIO
-use core::sync::atomic::{ AtomicBool, AtomicU16, Ordering };
+use core::sync::atomic::{ AtomicBool, AtomicU16, AtomicU32, Ordering };
 
 static button_pressed: AtomicBool = AtomicBool::new(false);
 static temperature_mcu: AtomicU16 = AtomicU16::new(0);
+static timestamp_u32: AtomicU32 = AtomicU32::new(0);
 
 
 bind_interrupts!(struct Irqs {
@@ -90,6 +94,20 @@ async fn blink_network(pin: embassy_stm32::PeripheralRef<'static, AnyPin>, stack
     }
 }
 
+#[embassy_executor::task]
+async fn rtc_timestamp(rtc: Rtc) {
+    let mut now: NaiveDateTime;
+    let mut new_timestamp: u32;
+
+    loop {
+        now = rtc.now().unwrap().into();
+        new_timestamp = (now.and_utc().timestamp()).try_into().unwrap();
+
+        timestamp_u32.store(new_timestamp, Ordering::Relaxed);
+        Timer::after_millis(500).await;
+    }
+}
+
 type AppRouter = impl picoserve::routing::PathRouter;
 
 const WEB_TASK_POOL_SIZE: usize = 8;
@@ -127,7 +145,7 @@ async fn main(spawner: Spawner) {
         use embassy_stm32::rcc::*;
         config.rcc.hse = Some(Hse {
             freq: Hertz(8_000_000),
-            mode: HseMode::Bypass,
+            mode: HseMode::Bypass, // Nucleo feeds main MCU from Debug MCU
         });
         config.rcc.pll_src = PllSource::HSE;
         config.rcc.pll = Some(Pll {
@@ -141,6 +159,14 @@ async fn main(spawner: Spawner) {
         config.rcc.apb1_pre = APBPrescaler::DIV4;
         config.rcc.apb2_pre = APBPrescaler::DIV2;
         config.rcc.sys = Sysclk::PLL1_P;
+        config.rcc.ls = LsConfig {
+            rtc: RtcClockSource::LSE,
+            lsi: false,
+            lse: Some(LseConfig {
+                frequency: Hertz(32_768),
+                mode: LseMode::Oscillator(LseDrive::MediumHigh),
+            })
+        };
     }
     let p = embassy_stm32::init(config);
 
@@ -149,7 +175,19 @@ async fn main(spawner: Spawner) {
     // Heartbeat LED Blinker
     spawner.spawn(blink_heartbeat(AnyPin::from(p.PB0).into_ref())).unwrap();
 
-    // Blue Button Handler
+    // RTC
+    let mut rtc = Rtc::new(p.RTC, RtcConfig::default());
+
+    // Set Initial Time
+    let now = NaiveDate::from_ymd_opt(2024, 3, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    rtc.set_datetime(now.into()).expect("datetime not set");
+
+    spawner.spawn(rtc_timestamp(rtc)).unwrap();
+
+    // Button Input
     let button_input = Input::new(p.PC13, Pull::Down);
     let button = ExtiInput::new(button_input, p.EXTI13);
 
@@ -253,13 +291,16 @@ async fn main(spawner: Spawner) {
             .route(
                 "/api/state",
                 get(
-                    || picoserve::response::Json(
-                        ( 
-                            ( "uptime_s", Instant::now().as_secs() ),
-                            ( "button_state", button_pressed.load(Ordering::Relaxed) ),
-                            ( "temp_c", temperature_mcu.load(Ordering::Relaxed) ),
+                    || async move {
+                        picoserve::response::Json(
+                            ( 
+                                ( "uptime_s", Instant::now().as_secs() ),
+                                ( "button_state", button_pressed.load(Ordering::Relaxed) ),
+                                ( "temp_c", temperature_mcu.load(Ordering::Relaxed) ),
+                                ( "device_timestamp", timestamp_u32.load(Ordering::Relaxed) ),
+                            )
                         )
-                    )
+                    }
                 ),
             )
     }

@@ -13,6 +13,13 @@ function data_state_lookup(key)
   return result === undefined ? undefined : result[1];
 }
 
+const dtFormat = new Intl.DateTimeFormat('en-GB',
+{
+  dateStyle: 'short',
+  timeStyle: 'medium',
+  timeZone: 'UTC'
+});
+
 let view_system_data = {
   view: function()
   {
@@ -33,6 +40,10 @@ let view_system_data = {
       m("p", [
         m("label", 'Button State:'),
         m("span", `${data_state_lookup("button_state")}`)
+      ]),
+      m("p", [
+        m("label", 'Device Timestamp:'),
+        m("span", `${dtFormat.format(new Date(data_state_lookup("device_timestamp")*1000))}`)
       ])
     ];
   }
