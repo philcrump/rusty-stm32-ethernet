@@ -248,6 +248,12 @@ async fn main(spawner: Spawner) {
 
     info!("Hello World!");
 
+    // Set up watchdog
+    let mut watchdog = embassy_stm32::wdg::IndependentWatchdog::new(p.IWDG, 30*1000*1000); // 30 seconds, to allow bootup
+    // Start it
+    watchdog.unleash();
+    watchdog.pet();
+
     // Heartbeat LED Blinker
     spawner.spawn(blink_heartbeat(AnyPin::from(p.PB0).into_ref())).unwrap();
 
@@ -473,6 +479,8 @@ async fn main(spawner: Spawner) {
     let ts_cal2: u16 = unsafe { *ts_cal2_ptr };
 
     loop {
+        watchdog.pet();
+
         let new_temperature_mcu = ((110.0-30.0) / f32::from(ts_cal2 - ts_cal1)) * f32::from(adc.read(&mut mcu_temp) - ts_cal1) + 30.0;
         temperature_mcu.store(new_temperature_mcu as u16, Ordering::Relaxed);
 
