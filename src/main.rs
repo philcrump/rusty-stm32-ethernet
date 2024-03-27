@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+// Don't complain about variable naming convention
+#![allow(non_snake_case)]
+
 // Picoserve
 #![feature(type_alias_impl_trait)]
 
