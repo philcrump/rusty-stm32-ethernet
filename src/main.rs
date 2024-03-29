@@ -124,6 +124,21 @@ async fn blink_network(pin: embassy_stm32::PeripheralRef<'static, AnyPin>, stack
     }
 }
 
+#[embassy_executor::task]
+async fn sntp_task(stack: &'static Stack<Device>, app_state: AppStateCore) {
+    // SNTP - eshail.batc.org.uk server
+    let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
+    loop {
+        let current_datetime = app_state.rtc_control.0.lock().await.now().unwrap();
+        let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
+        let _ = app_state.rtc_control.0.lock().await.set_datetime(new_datetime);
+
+        info!("Time Synchronised.");
+
+        Timer::after_secs(3600).await;
+    }
+}
+
 type AppRouter = impl picoserve::routing::PathRouter<PicoserveAppState>;
 
 const WEB_TASK_POOL_SIZE: usize = 8;
@@ -349,13 +364,8 @@ async fn main(spawner: Spawner) {
 
     info!("HTTP server initialised..");
 
-    // SNTP - eshail.batc.org.uk server
-    let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
-    let current_datetime = app_state.rtc_control.0.lock().await.now().unwrap();
-    let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
-    app_state.rtc_control.0.lock().await.set_datetime(new_datetime).expect("datetime not set");
-
-    info!("Time Synchronised..");
+    spawner.spawn(sntp_task(stack, app_state)).unwrap();
+    info!("SNTP Task started.");
 
     for id in 0..WEB_TASK_POOL_SIZE {
         spawner.must_spawn(web_task(
