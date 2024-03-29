@@ -29,6 +29,50 @@ printf_nv() {
 	fi
 }
 
+#device_name="STM32F042K6"
+#device_ram=$((6*1024))
+#device_flash=$((32*1024))
+
+#device_name="STM32F746NG"
+#device_ram=$((240*1024)) # Main bank
+#device_flash=$((1024*1024))
+
+#device_name="STM32F429ZI"
+#device_ram=$((112*1024)) # Main bank
+#device_flash=$((1024*1024))
+
+device_name="STM32F767ZI"
+device_ram=$((1*512*1024)) # Main bank
+device_flash=$((1*1024*1024)) # First bank
+
+#device_name="STM32H753ZI"
+#device_ram=$((1*512*1024)) # Main bank
+#device_flash=$((1*1024*1024)) # First bank
+
+size_binary() {
+  size=`arm-none-eabi-size -A -d $1`;
+
+  size_text=`echo "$size" | grep '\.text' | grep -o -E '[0-9]+' | sed -n 1p`;
+  size_rodata=`echo "$size" | grep '\.rodata' | grep -o -E '[0-9]+' | sed -n 1p`;
+  size_data=`echo "$size" | grep '\.data' | grep -o -E '[0-9]+' | sed -n 1p`;
+  size_bss=`echo "$size" | grep '\.bss' | grep -o -E '[0-9]+' | sed -n 1p`;
+  #size_heap=`echo "$size" | grep '\.heap' | grep -o -E '[0-9]+' | sed -n 1p`;
+
+  size_flash=$(($size_text+$size_data+$size_rodata));
+  size_static=$(($size_data+$size_bss));
+  #size_ram=$(($size_static+$size_heap));
+  size_ram=$(($size_static));
+  size_fdata=$(($size_data+$size_rodata));
+
+  printf "$_INFO_ Device Resources (%s)\n" ${device_name};
+  printf "  RAM:       %   6s B / % 6s B (%2s%% allocated)\n" ${size_ram} ${device_ram} $(((100*$size_ram)/$device_ram));
+  printf "   - Static: %   6s B (%2s%% used)\n" ${size_static} $(((100*$size_static)/$device_ram));
+  printf "   - Heap:   %   6s B\n" ${size_heap};
+  printf "  Flash:     %   6s B / % 6s B (%2s%%)\n" ${size_flash} ${device_flash} $(((100*$size_flash)/$device_flash));
+  printf "   - Code:   %   6s B\n" ${size_text};
+  printf "   - Data:   %   6s B\n" ${size_fdata};
+}
+
 ## Read Flags
 OPTIND=1
 while getopts ":v" opt; do
@@ -45,4 +89,12 @@ done
 for i in `seq 2 $OPTIND`; do shift; done
 
 ./build_htdocs;
-cargo +nightly build --release;
+cargo +nightly build --release \
+&& {
+  printf "$_INFO_$COLOUR_GREEN Build successful$COLOUR_OFF\n"
+} || {
+  printf "$_ERROR_$COLOUR_RED There were errors in the build process$COLOUR_OFF\n" \
+  && exit 1
+}
+
+size_binary "target/thumbv7em-none-eabihf/release/philrusty";
