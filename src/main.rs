@@ -16,7 +16,7 @@ use embassy_stm32::peripherals::ETH;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::adc::{Adc, SampleTime::Cycles480};
 use embassy_stm32::gpio::{Input, Level, Output, Speed, AnyPin, Pull};
-use embassy_stm32::exti::ExtiInput;
+//use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::Peripheral;
 use embassy_stm32::{bind_interrupts, eth, Config}; // rng, peripherals
 use embassy_time::{Delay, Timer, Instant};
@@ -57,9 +57,14 @@ mod sntp;
 
 
 // GPIO
-use core::sync::atomic::{ AtomicBool, AtomicU16, Ordering };
+use core::sync::atomic::{ AtomicU16, Ordering };
 
-static temperature_mcu: AtomicU16 = AtomicU16::new(0);
+struct AppMonitor {
+    temperature_mcu: AtomicU16
+}
+static APP_VALUES: AppMonitor = AppMonitor {
+    temperature_mcu: AtomicU16::new(0)
+};
 
 
 // State Sync
@@ -72,16 +77,16 @@ struct RtcSharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
 struct InputSharedControl(&'static Mutex<CriticalSectionRawMutex, Input<'static, AnyPin>>);
 
 #[derive(Clone, Copy)]
-struct AppStateCore {
+struct AppControl {
     rtc_control: RtcSharedControl,
     testbutton_control: InputSharedControl,
 }
 // This is what is shared on picoserve
-struct PicoserveAppState {
-    shared_control: AppStateCore,
+struct PicoserveAppControl {
+    shared_control: AppControl,
 }
-impl picoserve::extract::FromRef<PicoserveAppState> for AppStateCore {
-    fn from_ref(state: &PicoserveAppState) -> Self {
+impl picoserve::extract::FromRef<PicoserveAppControl> for AppControl {
+    fn from_ref(state: &PicoserveAppControl) -> Self {
         state.shared_control
     }
 }
@@ -125,13 +130,45 @@ async fn blink_network(pin: embassy_stm32::PeripheralRef<'static, AnyPin>, stack
 }
 
 #[embassy_executor::task]
-async fn sntp_task(stack: &'static Stack<Device>, app_state: AppStateCore) {
+async fn adc1_task(adc_instance: embassy_stm32::peripherals::ADC1) {
+
+    // STM32H7 ADC Cal pointers
+    //let ts_cal1_ptr = 0x1FF1E820 as *const u16;
+    //let ts_cal2_ptr = 0x1FF1E840 as *const u16;
+
+    // STM32F7 ADC Cal pointers
+    let ts_cal1_ptr = 0x1FF0F44C as *const u16;
+    let ts_cal2_ptr = 0x1FF0F44E as *const u16;
+
+    let adc_ts_cal1 = unsafe { *ts_cal1_ptr };
+    let adc_ts_cal2 = unsafe { *ts_cal2_ptr };
+
+    // MCU Temperature Sensor
+    let mut adc = Adc::new(adc_instance, &mut Delay);
+    adc.set_sample_time(Cycles480);
+    let mut mcu_temp = adc.enable_temperature();
+
+    let mut new_temperature_mcu: f32;
+
+    loop {
+        new_temperature_mcu = ((110.0-30.0) / f32::from(adc_ts_cal2 - adc_ts_cal1)) * f32::from(adc.read(&mut mcu_temp) - adc_ts_cal1) + 30.0;
+
+        APP_VALUES.temperature_mcu.store(new_temperature_mcu as u16, Ordering::Relaxed); 
+
+        //info!("MCU Temp: {:?}", new_temperature_mcu);
+
+        Timer::after_secs(1).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn sntp_task(stack: &'static Stack<Device>, app_control: AppControl) {
     // SNTP - eshail.batc.org.uk server
     let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
     loop {
-        let current_datetime = app_state.rtc_control.0.lock().await.now().unwrap();
+        let current_datetime = app_control.rtc_control.0.lock().await.now().unwrap();
         let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
-        let _ = app_state.rtc_control.0.lock().await.set_datetime(new_datetime);
+        let _ = app_control.rtc_control.0.lock().await.set_datetime(new_datetime);
 
         info!("Time Synchronised.");
 
@@ -139,7 +176,7 @@ async fn sntp_task(stack: &'static Stack<Device>, app_state: AppStateCore) {
     }
 }
 
-type AppRouter = impl picoserve::routing::PathRouter<PicoserveAppState>;
+type AppRouter = impl picoserve::routing::PathRouter<PicoserveAppControl>;
 
 const WEB_TASK_POOL_SIZE: usize = 8;
 const NTP_TASK_POOL_SIZE: usize = 1;
@@ -149,9 +186,9 @@ const NET_TASK_POOL_SIZE: usize = WEB_TASK_POOL_SIZE + NTP_TASK_POOL_SIZE + 1; /
 async fn web_task(
     id: usize,
     stack: &'static embassy_net::Stack<Device>,
-    app: &'static picoserve::Router<AppRouter, PicoserveAppState>,
+    app: &'static picoserve::Router<AppRouter, PicoserveAppControl>,
     config: &'static picoserve::Config<Duration>,
-    state: PicoserveAppState
+    state: PicoserveAppControl
 ) -> ! {
     let port = 80;
     let mut tcp_rx_buffer = [0; 1024];
@@ -215,6 +252,9 @@ async fn main(spawner: Spawner) {
     // Heartbeat LED Blinker
     spawner.spawn(blink_heartbeat(AnyPin::from(p.PB0).into_ref())).unwrap();
 
+    spawner.spawn(adc1_task(p.ADC1)).unwrap();
+    info!("MCU Temperature task started.");
+
     // RTC
     let mut rtc: Rtc = Rtc::new(p.RTC, RtcConfig::default());
 
@@ -224,17 +264,8 @@ async fn main(spawner: Spawner) {
         .and_hms_opt(0, 0, 0)
         .unwrap();
     rtc.set_datetime(now.into()).expect("datetime not set");
-
-    // Button Input
-    //let button_input = Input::new(p.PC13, Pull::Down);
-    //let button = ExtiInput::new(button_input, p.EXTI13);
-
-    // MCU Temperature Sensor
-    let mut adc = Adc::new(p.ADC1, &mut Delay);
-    adc.set_sample_time(Cycles480);
-    let mut mcu_temp = adc.enable_temperature();
     
-    let app_state = AppStateCore {
+    let app_control = AppControl {
         rtc_control: RtcSharedControl(make_static!(Mutex::new(rtc))),
         testbutton_control: InputSharedControl(make_static!(Mutex::new(Input::new(AnyPin::from(p.PC13), Pull::Down)))),
     };
@@ -297,7 +328,7 @@ async fn main(spawner: Spawner) {
 
     info!("Network is up!");
 
-    fn make_app() -> picoserve::Router<AppRouter, PicoserveAppState> {
+    fn make_app() -> picoserve::Router<AppRouter, PicoserveAppControl> {
         picoserve::Router::new()
             .route(
                 "/",
@@ -334,7 +365,7 @@ async fn main(spawner: Spawner) {
             .route(
                 "/api/state",
                 get(
-                    |State(shared_control): State<AppStateCore>| async move {
+                    |State(shared_control): State<AppControl>| async move {
                         let now: NaiveDateTime;
                         let new_timestamp: u32;
 
@@ -347,7 +378,7 @@ async fn main(spawner: Spawner) {
                             ( 
                                 ( "uptime_s", Instant::now().as_secs() ),
                                 ( "button_state", testbutton_state ),
-                                ( "temp_c", temperature_mcu.load(Ordering::Relaxed) ),
+                                ( "temp_c", APP_VALUES.temperature_mcu.load(Ordering::Relaxed) ),
                                 ( "device_timestamp", new_timestamp ),
                             )
                         )
@@ -367,7 +398,7 @@ async fn main(spawner: Spawner) {
 
     info!("HTTP server initialised..");
 
-    spawner.spawn(sntp_task(stack, app_state)).unwrap();
+    spawner.spawn(sntp_task(stack, app_control)).unwrap();
     info!("SNTP Task started.");
 
     for id in 0..WEB_TASK_POOL_SIZE {
@@ -376,30 +407,14 @@ async fn main(spawner: Spawner) {
             stack,
             app,
             config,
-            PicoserveAppState { shared_control: app_state },
+            PicoserveAppControl { shared_control: app_control },
         ));
     }
 
     info!("HTTP server up!");
 
-    // STM32H7 Cal pointers
-    //let ts_cal1_ptr = 0x1FF1E820 as *const u16;
-    //let ts_cal2_ptr = 0x1FF1E840 as *const u16;
-
-    // STM32F7 Cal pointers
-    let ts_cal1_ptr = 0x1FF0F44C as *const u16;
-    let ts_cal2_ptr = 0x1FF0F44E as *const u16;
-
-    let ts_cal1: u16 = unsafe { *ts_cal1_ptr };
-    let ts_cal2: u16 = unsafe { *ts_cal2_ptr };
-
     loop {
         watchdog.pet();
-
-        let new_temperature_mcu = ((110.0-30.0) / f32::from(ts_cal2 - ts_cal1)) * f32::from(adc.read(&mut mcu_temp) - ts_cal1) + 30.0;
-        temperature_mcu.store(new_temperature_mcu as u16, Ordering::Relaxed);
-
-        info!("{:?}", new_temperature_mcu);
 
         Timer::after_millis(100).await;
     }
