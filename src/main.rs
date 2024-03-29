@@ -25,6 +25,15 @@ use embassy_time::{Delay, Timer, Instant};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
+
+// Ethernet
+bind_interrupts!(struct Irqs {
+    ETH => eth::InterruptHandler;
+//    HASH_RNG => rng::InterruptHandler<peripherals::RNG>; // No HW crypto in F767
+});
+type Device = Ethernet<'static, ETH, GenericSMI>;
+
+
 // Picoserve
 use static_cell::make_static;
 //use cortex_m::register::control::Control;
@@ -36,28 +45,41 @@ use picoserve::{
 };
 //use picoserve::extract::State;
 
+
 // Time
 use embassy_stm32::rtc::{Rtc, RtcConfig};
 use chrono::{NaiveDate, NaiveDateTime};
 //use heapless::String;
 
+
 // NTP
 mod sntp;
 
-//GPIO
-use core::sync::atomic::{ AtomicBool, AtomicU16, AtomicU32, Ordering };
+
+// GPIO
+use core::sync::atomic::{ AtomicBool, AtomicU16, Ordering };
 
 static button_pressed: AtomicBool = AtomicBool::new(false);
 static temperature_mcu: AtomicU16 = AtomicU16::new(0);
-static timestamp_u32: AtomicU32 = AtomicU32::new(0);
 
 
-bind_interrupts!(struct Irqs {
-    ETH => eth::InterruptHandler;
-//    HASH_RNG => rng::InterruptHandler<peripherals::RNG>; // No HW crypto in F767
-});
+// State Sync
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use picoserve::extract::State;
 
-type Device = Ethernet<'static, ETH, GenericSMI>;
+#[derive(Clone, Copy)]
+struct SharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
+
+// This is what is shared on picoserve
+struct AppState {
+    shared_control: SharedControl,
+}
+impl picoserve::extract::FromRef<AppState> for SharedControl {
+    fn from_ref(state: &AppState) -> Self {
+        state.shared_control
+    }
+}
+
 
 #[embassy_executor::task]
 async fn net_task(stack: &'static Stack<Device>) {
@@ -96,21 +118,7 @@ async fn blink_network(pin: embassy_stm32::PeripheralRef<'static, AnyPin>, stack
     }
 }
 
-#[embassy_executor::task]
-async fn rtc_timestamp(rtc: Rtc) {
-    let mut now: NaiveDateTime;
-    let mut new_timestamp: u32;
-
-    loop {
-        now = rtc.now().unwrap().into();
-        new_timestamp = (now.and_utc().timestamp()).try_into().unwrap();
-
-        timestamp_u32.store(new_timestamp, Ordering::Relaxed);
-        Timer::after_millis(500).await;
-    }
-}
-
-type AppRouter = impl picoserve::routing::PathRouter;
+type AppRouter = impl picoserve::routing::PathRouter<AppState>;
 
 const WEB_TASK_POOL_SIZE: usize = 8;
 const NTP_TASK_POOL_SIZE: usize = 1;
@@ -120,15 +128,16 @@ const NET_TASK_POOL_SIZE: usize = WEB_TASK_POOL_SIZE + NTP_TASK_POOL_SIZE + 1; /
 async fn web_task(
     id: usize,
     stack: &'static embassy_net::Stack<Device>,
-    app: &'static picoserve::Router<AppRouter>,
+    app: &'static picoserve::Router<AppRouter, AppState>,
     config: &'static picoserve::Config<Duration>,
+    state: AppState
 ) -> ! {
     let port = 80;
     let mut tcp_rx_buffer = [0; 1024];
     let mut tcp_tx_buffer = [0; 1024];
     let mut http_buffer = [0; 2048];
 
-    picoserve::listen_and_serve(
+    picoserve::listen_and_serve_with_state(
         id,
         app,
         config,
@@ -136,7 +145,8 @@ async fn web_task(
         port,
         &mut tcp_rx_buffer,
         &mut tcp_tx_buffer,
-        &mut http_buffer
+        &mut http_buffer,
+        &state,
     )
     .await
 }
@@ -154,7 +164,7 @@ async fn main(spawner: Spawner) {
         config.rcc.pll = Some(Pll {
             prediv: PllPreDiv::DIV4,
             mul: PllMul::MUL216,
-            divp: Some(PllPDiv::DIV2), // 8mhz / 4 * 216 / 2 = 216Mhz
+            divp: Some(PllPDiv::DIV2), // 8mhz / 4 * 216 / 2 = 216MHz, F767ZI top speed.
             divq: None,
             divr: None,
         });
@@ -185,7 +195,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(blink_heartbeat(AnyPin::from(p.PB0).into_ref())).unwrap();
 
     // RTC
-    let mut rtc = Rtc::new(p.RTC, RtcConfig::default());
+    let mut rtc: Rtc = Rtc::new(p.RTC, RtcConfig::default());
 
     // Set Initial Time
     let now = NaiveDate::from_ymd_opt(2024, 3, 1)
@@ -261,7 +271,7 @@ async fn main(spawner: Spawner) {
 
     info!("Network is up!");
 
-    fn make_app() -> picoserve::Router<AppRouter> {
+    fn make_app() -> picoserve::Router<AppRouter, AppState> {
         picoserve::Router::new()
             .route(
                 "/",
@@ -298,13 +308,19 @@ async fn main(spawner: Spawner) {
             .route(
                 "/api/state",
                 get(
-                    || async move {
+                    |State(SharedControl(rtc)): State<SharedControl>| async move {
+                        let now: NaiveDateTime;
+                        let new_timestamp: u32;
+
+                        now = rtc.lock().await.now().unwrap().into();
+                        new_timestamp = (now.and_utc().timestamp()).try_into().unwrap();
+
                         picoserve::response::Json(
                             ( 
                                 ( "uptime_s", Instant::now().as_secs() ),
                                 ( "button_state", button_pressed.load(Ordering::Relaxed) ),
                                 ( "temp_c", temperature_mcu.load(Ordering::Relaxed) ),
-                                ( "device_timestamp", timestamp_u32.load(Ordering::Relaxed) ),
+                                ( "device_timestamp", new_timestamp ),
                             )
                         )
                     }
@@ -323,27 +339,27 @@ async fn main(spawner: Spawner) {
 
     info!("HTTP server initialised..");
 
-    for id in 0..WEB_TASK_POOL_SIZE {
-        spawner.must_spawn(web_task(
-            id,
-            stack,
-            app,
-            config
-        ));
-    }
-
-    info!("HTTP server up!");
-
     // SNTP - eshail.batc.org.uk server
     let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
     let current_datetime = rtc.now().unwrap();
     let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
     rtc.set_datetime(new_datetime).expect("datetime not set");
 
-    // *After* NTP is done with RTC, as rust is 'moving' the ownership
-    spawner.spawn(rtc_timestamp(rtc)).unwrap();
+    info!("Time Synchronised..");
 
-    info!("Started RTC Thread");
+    let shared_control = SharedControl(make_static!(Mutex::new(rtc)));
+
+    for id in 0..WEB_TASK_POOL_SIZE {
+        spawner.must_spawn(web_task(
+            id,
+            stack,
+            app,
+            config,
+            AppState { shared_control },
+        ));
+    }
+
+    info!("HTTP server up!");
 
     // STM32H7 Cal pointers
     //let ts_cal1_ptr = 0x1FF1E820 as *const u16;
