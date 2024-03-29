@@ -68,14 +68,20 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use picoserve::extract::State;
 
 #[derive(Clone, Copy)]
-struct SharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
+struct RtcSharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
+#[derive(Clone, Copy)]
+struct NuSharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
 
-// This is what is shared on picoserve
-struct AppState {
-    shared_control: SharedControl,
+#[derive(Clone, Copy)]
+struct AppStateCore {
+    rtc_control: RtcSharedControl,
 }
-impl picoserve::extract::FromRef<AppState> for SharedControl {
-    fn from_ref(state: &AppState) -> Self {
+// This is what is shared on picoserve
+struct PicoserveAppState {
+    shared_control: AppStateCore,
+}
+impl picoserve::extract::FromRef<PicoserveAppState> for AppStateCore {
+    fn from_ref(state: &PicoserveAppState) -> Self {
         state.shared_control
     }
 }
@@ -118,7 +124,7 @@ async fn blink_network(pin: embassy_stm32::PeripheralRef<'static, AnyPin>, stack
     }
 }
 
-type AppRouter = impl picoserve::routing::PathRouter<AppState>;
+type AppRouter = impl picoserve::routing::PathRouter<PicoserveAppState>;
 
 const WEB_TASK_POOL_SIZE: usize = 8;
 const NTP_TASK_POOL_SIZE: usize = 1;
@@ -128,9 +134,9 @@ const NET_TASK_POOL_SIZE: usize = WEB_TASK_POOL_SIZE + NTP_TASK_POOL_SIZE + 1; /
 async fn web_task(
     id: usize,
     stack: &'static embassy_net::Stack<Device>,
-    app: &'static picoserve::Router<AppRouter, AppState>,
+    app: &'static picoserve::Router<AppRouter, PicoserveAppState>,
     config: &'static picoserve::Config<Duration>,
-    state: AppState
+    state: PicoserveAppState
 ) -> ! {
     let port = 80;
     let mut tcp_rx_buffer = [0; 1024];
@@ -212,6 +218,10 @@ async fn main(spawner: Spawner) {
     let mut adc = Adc::new(p.ADC1, &mut Delay);
     adc.set_sample_time(Cycles480);
     let mut mcu_temp = adc.enable_temperature();
+    
+    let app_state = AppStateCore {
+        rtc_control: RtcSharedControl(make_static!(Mutex::new(rtc)))
+    };
 
     // Generate random seed.
     //let mut rng = Rng::new(p.RNG, Irqs);
@@ -271,7 +281,7 @@ async fn main(spawner: Spawner) {
 
     info!("Network is up!");
 
-    fn make_app() -> picoserve::Router<AppRouter, AppState> {
+    fn make_app() -> picoserve::Router<AppRouter, PicoserveAppState> {
         picoserve::Router::new()
             .route(
                 "/",
@@ -308,11 +318,11 @@ async fn main(spawner: Spawner) {
             .route(
                 "/api/state",
                 get(
-                    |State(SharedControl(rtc)): State<SharedControl>| async move {
+                    |State(shared_control): State<AppStateCore>| async move {
                         let now: NaiveDateTime;
                         let new_timestamp: u32;
 
-                        now = rtc.lock().await.now().unwrap().into();
+                        now = shared_control.rtc_control.0.lock().await.now().unwrap().into();
                         new_timestamp = (now.and_utc().timestamp()).try_into().unwrap();
 
                         picoserve::response::Json(
@@ -341,13 +351,11 @@ async fn main(spawner: Spawner) {
 
     // SNTP - eshail.batc.org.uk server
     let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
-    let current_datetime = rtc.now().unwrap();
+    let current_datetime = app_state.rtc_control.0.lock().await.now().unwrap();
     let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
-    rtc.set_datetime(new_datetime).expect("datetime not set");
+    app_state.rtc_control.0.lock().await.set_datetime(new_datetime).expect("datetime not set");
 
     info!("Time Synchronised..");
-
-    let shared_control = SharedControl(make_static!(Mutex::new(rtc)));
 
     for id in 0..WEB_TASK_POOL_SIZE {
         spawner.must_spawn(web_task(
@@ -355,7 +363,7 @@ async fn main(spawner: Spawner) {
             stack,
             app,
             config,
-            AppState { shared_control },
+            PicoserveAppState { shared_control: app_state },
         ));
     }
 
