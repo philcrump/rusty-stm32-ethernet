@@ -59,7 +59,6 @@ mod sntp;
 // GPIO
 use core::sync::atomic::{ AtomicBool, AtomicU16, Ordering };
 
-static button_pressed: AtomicBool = AtomicBool::new(false);
 static temperature_mcu: AtomicU16 = AtomicU16::new(0);
 
 
@@ -70,11 +69,12 @@ use picoserve::extract::State;
 #[derive(Clone, Copy)]
 struct RtcSharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
 #[derive(Clone, Copy)]
-struct NuSharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
+struct InputSharedControl(&'static Mutex<CriticalSectionRawMutex, Input<'static, AnyPin>>);
 
 #[derive(Clone, Copy)]
 struct AppStateCore {
     rtc_control: RtcSharedControl,
+    testbutton_control: InputSharedControl,
 }
 // This is what is shared on picoserve
 struct PicoserveAppState {
@@ -226,8 +226,8 @@ async fn main(spawner: Spawner) {
     rtc.set_datetime(now.into()).expect("datetime not set");
 
     // Button Input
-    let button_input = Input::new(p.PC13, Pull::Down);
-    let button = ExtiInput::new(button_input, p.EXTI13);
+    //let button_input = Input::new(p.PC13, Pull::Down);
+    //let button = ExtiInput::new(button_input, p.EXTI13);
 
     // MCU Temperature Sensor
     let mut adc = Adc::new(p.ADC1, &mut Delay);
@@ -235,7 +235,8 @@ async fn main(spawner: Spawner) {
     let mut mcu_temp = adc.enable_temperature();
     
     let app_state = AppStateCore {
-        rtc_control: RtcSharedControl(make_static!(Mutex::new(rtc)))
+        rtc_control: RtcSharedControl(make_static!(Mutex::new(rtc))),
+        testbutton_control: InputSharedControl(make_static!(Mutex::new(Input::new(AnyPin::from(p.PC13), Pull::Down)))),
     };
 
     // Generate random seed.
@@ -340,10 +341,12 @@ async fn main(spawner: Spawner) {
                         now = shared_control.rtc_control.0.lock().await.now().unwrap().into();
                         new_timestamp = (now.and_utc().timestamp()).try_into().unwrap();
 
+                        let testbutton_state: bool = shared_control.testbutton_control.0.lock().await.is_high();
+
                         picoserve::response::Json(
                             ( 
                                 ( "uptime_s", Instant::now().as_secs() ),
-                                ( "button_state", button_pressed.load(Ordering::Relaxed) ),
+                                ( "button_state", testbutton_state ),
                                 ( "temp_c", temperature_mcu.load(Ordering::Relaxed) ),
                                 ( "device_timestamp", new_timestamp ),
                             )
@@ -398,21 +401,6 @@ async fn main(spawner: Spawner) {
 
         info!("{:?}", new_temperature_mcu);
 
-        if button.is_low()
-        {
-            let _ = button_pressed.compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed);
-        }
-        else {
-            let _ = button_pressed.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed);
-        }
-
         Timer::after_millis(100).await;
-
-        // Check if button got pressed
-        //button.wait_for_rising_edge().await;
-        //button_pressed.store(true, Ordering::Relaxed);
-
-        //button.wait_for_falling_edge().await;
-        //button_pressed.store(false, Ordering::Relaxed);
     }
 }
