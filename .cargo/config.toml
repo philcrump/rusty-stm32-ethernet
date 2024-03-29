@@ -6,5 +6,8 @@ runner = "probe-rs run --chip STM32F767ZITx"
 [build]
 target = "thumbv7em-none-eabihf"
 
+[profile.release]
+opt-level = 3 # 3, 2, 1, 0, s, z
+
 [env]
 DEFMT_LOG = "trace"
