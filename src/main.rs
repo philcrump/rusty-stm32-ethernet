@@ -8,7 +8,7 @@ use defmt::*;
 use embassy_executor::Spawner;
 //use embassy_net::tcp::TcpSocket;
 //use embassy_net::tcp::client::{TcpClient, TcpClientState};
-use embassy_net::{Stack, StackResources, DhcpConfig};
+use embassy_net::{Stack, StackResources, DhcpConfig, IpEndpoint, IpAddress};
 use embassy_stm32::eth::generic_smi::GenericSMI;
 use embassy_stm32::eth::{Ethernet, PacketQueue};
 use embassy_stm32::peripherals::ETH;
@@ -334,9 +334,10 @@ async fn main(spawner: Spawner) {
 
     info!("HTTP server up!");
 
-    // SNTP
+    // SNTP - eshail.batc.org.uk server
+    let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
     let current_datetime = rtc.now().unwrap();
-    let new_datetime = sntp::sntp_request(stack, current_datetime).await;
+    let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
     rtc.set_datetime(new_datetime).expect("datetime not set");
 
     // *After* NTP is done with RTC, as rust is 'moving' the ownership
