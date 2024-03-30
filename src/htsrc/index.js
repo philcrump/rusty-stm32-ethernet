@@ -1,6 +1,7 @@
 'use strict';
 
 let doc_system_data = null;
+let doc_control_data = null;
 let doc_jsonstate_ui = null;
 let doc_disconnection_ui = null;
 
@@ -49,6 +50,51 @@ let view_system_data = {
   }
 }
 
+let view_control_data = {
+  view: function()
+  {
+    if(data_state === null)
+    {
+      return;
+    }
+
+    return [
+      m("p", [
+        m("button",
+          {
+            'class': 'btn btn-primary',
+            'onclick' : e => button_control_submit(true)
+          },
+          'Red Led On'
+        )
+      ]),
+      m("p", [
+        m("button",
+          {
+            'class': 'btn btn-primary',
+            'onclick' : e => button_control_submit(false)
+          },
+          'Red Led Off'
+        )
+      ]),
+    ];
+  }
+}
+
+function button_control_submit(newState)
+{
+  m.request({
+    method: "POST",
+    url: `/api/state`,
+    body: m.buildQueryString({ state: newState }),
+    serialize: function(data) {return data},
+    deserialize: function(data) {return data},
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
+  });
+}
+
 let view_jsonstate_ui = {
   view: function()
   {
@@ -86,9 +132,11 @@ function state_update()
 window.onload = function()
 {
   doc_system_data = document.getElementById('system-data');
+  doc_control_data = document.getElementById('control-data');
   doc_jsonstate_ui = document.getElementById('jsonstate-ui');
 
   m.mount(doc_system_data, view_system_data);
+  m.mount(doc_control_data, view_control_data);
   m.mount(doc_jsonstate_ui, view_jsonstate_ui);
   
   doc_disconnection_ui = document.getElementById('disconnection-ui');

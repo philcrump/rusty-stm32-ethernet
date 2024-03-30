@@ -32,6 +32,7 @@ static_cell = { version = "2", features = ["nightly"] }
 
 # Picoserve
 picoserve = { version = "0.10.2", features = ["embassy"] }
+serde = { version = "1.0.183", default-features = false, features = ["derive"] }
 
 # Time
 chrono = { version = "^0.4", default-features = false}

@@ -43,7 +43,11 @@ use picoserve::{
     //response::DebugValue,
     routing::{ get }, //parse_path_segment
 };
-//use picoserve::extract::State;
+
+#[derive(serde::Deserialize)]
+struct PostFormBoolState {
+    state: heapless::String<16>,
+}
 
 
 // Time
@@ -75,11 +79,14 @@ use picoserve::extract::State;
 struct RtcSharedControl(&'static Mutex<CriticalSectionRawMutex, Rtc>);
 #[derive(Clone, Copy)]
 struct InputSharedControl(&'static Mutex<CriticalSectionRawMutex, Input<'static, AnyPin>>);
+#[derive(Clone, Copy)]
+struct OutputSharedControl(&'static Mutex<CriticalSectionRawMutex, Output<'static, AnyPin>>);
 
 #[derive(Clone, Copy)]
 struct AppControl {
     rtc_control: RtcSharedControl,
     testbutton_control: InputSharedControl,
+    redled_control: OutputSharedControl,
 }
 // This is what is shared on picoserve
 struct PicoserveAppControl {
@@ -268,6 +275,7 @@ async fn main(spawner: Spawner) {
     let app_control = AppControl {
         rtc_control: RtcSharedControl(make_static!(Mutex::new(rtc))),
         testbutton_control: InputSharedControl(make_static!(Mutex::new(Input::new(AnyPin::from(p.PC13), Pull::Down)))),
+        redled_control: OutputSharedControl(make_static!(Mutex::new(Output::new(AnyPin::from(p.PB14), Level::Low, Speed::Low)))),
     };
 
     // Generate random seed.
@@ -383,7 +391,18 @@ async fn main(spawner: Spawner) {
                             )
                         )
                     }
-                ),
+                ).post(
+                    |State(shared_control): State<AppControl>, picoserve::extract::Form(PostFormBoolState { state })| async move {
+                        if state == "true"
+                        {
+                            shared_control.redled_control.0.lock().await.set_high();
+                        }
+                        else if state == "false"
+                        {
+                            shared_control.redled_control.0.lock().await.set_low();
+                        }
+                    }
+                )
             )
     }
 
