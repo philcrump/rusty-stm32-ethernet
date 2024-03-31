@@ -381,11 +381,13 @@ async fn main(spawner: Spawner) {
                         new_timestamp = (now.and_utc().timestamp()).try_into().unwrap();
 
                         let testbutton_state: bool = shared_control.testbutton_control.0.lock().await.is_high();
+                        let redled_state: bool = shared_control.redled_control.0.lock().await.is_set_high();
 
                         picoserve::response::Json(
                             ( 
                                 ( "uptime_s", Instant::now().as_secs() ),
                                 ( "button_state", testbutton_state ),
+                                ( "redled_state", redled_state ),
                                 ( "temp_c", APP_VALUES.temperature_mcu.load(Ordering::Relaxed) ),
                                 ( "device_timestamp", new_timestamp ),
                             )

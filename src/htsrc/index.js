@@ -43,7 +43,11 @@ let view_system_data = {
         m("span", `${data_state_lookup("button_state")}`)
       ]),
       m("p", [
-        m("label", 'Device Timestamp:'),
+        m("label", 'Red Led State:'),
+        m("span", `${data_state_lookup("redled_state")}`)
+      ]),
+      m("p", [
+        m("label", 'Device UTC Time:'),
         m("span", `${dtFormat.format(new Date(data_state_lookup("device_timestamp")*1000))}`)
       ])
     ];
