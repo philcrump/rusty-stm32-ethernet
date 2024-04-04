@@ -174,10 +174,16 @@ async fn sntp_task(stack: &'static Stack<Device>, app_control: AppControl) {
     let ntphost = IpEndpoint::new(IpAddress::v4(185, 83, 169, 27), 123);
     loop {
         let current_datetime = app_control.rtc_control.0.lock().await.now().unwrap();
-        let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
-        let _ = app_control.rtc_control.0.lock().await.set_datetime(new_datetime);
 
-        info!("Time Synchronised.");
+        let new_datetime = sntp::sntp_request(stack, ntphost, current_datetime).await;
+        if new_datetime.is_some()
+        {
+            let _ = app_control.rtc_control.0.lock().await.set_datetime(new_datetime.unwrap());
+            info!("Time Synchronised.");
+        }
+        else {
+            warn!("Failed to synchronise time.");
+        }
 
         Timer::after_secs(3600).await;
     }
