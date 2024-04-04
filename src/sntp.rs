@@ -129,7 +129,7 @@ pub async fn sntp_request(stack: &Stack<Device>, hostEndpoint: IpEndpoint, init_
 
     /* Crudely taking the server transmitted timestamp is enough for us here */
     let srv_tx_timestamp_s:u32 = u32::from_be(ntp_rx2.txTm_s) - NTP_TIMESTAMP_DELTA;
-    let srv_tx_timestamp_f:u32 = u32::from_be(ntp_rx2.txTm_f) / NTP_NS_TO_FS as u32;
+    let srv_tx_timestamp_f:u32 = (u32::from_be(ntp_rx2.txTm_f) as f32 / NTP_NS_TO_FS) as u32;
 
     return DateTime::from_timestamp(srv_tx_timestamp_s as i64, srv_tx_timestamp_f).unwrap().naive_utc().try_into().unwrap();
 }
