@@ -60,6 +60,15 @@ use chrono::{NaiveDate, NaiveDateTime};
 mod sntp;
 
 
+// SNMP
+use embassy_net::udp::{UdpSocket, PacketMetadata};
+use nom::{IResult, Err, Needed};
+use nom::error::{Error, ErrorKind};
+use nom::combinator::{flat_map, map, map_res};
+use nom::number::streaming::{be_f64, be_i16, be_i24, be_u16, be_u24, be_u32, be_u8};
+use nom::sequence::{pair, terminated, tuple};
+use nom::multi::{length_data, fill};
+
 // GPIO
 use core::sync::atomic::{ AtomicU16, Ordering };
 
@@ -189,11 +198,281 @@ async fn sntp_task(stack: &'static Stack<Device>, app_control: AppControl) {
     }
 }
 
+fn print_field(field: &TlvTag)
+{
+    if field.tlvtype == 0x02
+    {
+        if field.tlvdata.len() == 1
+        {
+            info!("Integer: {} (d)", field.tlvdata);
+        }
+        else if field.tlvdata.len() == 2
+        {
+            info!("Integer: {} (d)", u16::from_be_bytes(field.tlvdata.try_into().unwrap()));
+        }
+        else if field.tlvdata.len() == 4
+        {
+            info!("Integer: {} (d)", u32::from_be_bytes(field.tlvdata.try_into().unwrap()));
+        }
+    }
+    else if field.tlvtype == 0x04
+    {
+        if let Ok(s) = core::str::from_utf8(&field.tlvdata) {
+            info!("String: {}", s);
+        }
+        else {
+            info!("Buffer: {}", field.tlvdata);
+        }
+    }
+    else if field.tlvtype == 0x06
+    {
+        info!("OID: {:02x} (x)", field.tlvdata);
+    }
+    else if field.tlvtype == 0x30
+    {
+        info!("ASN Sequence: {:02x} (x)", field.tlvdata);
+    }
+    else if field.tlvtype == 0xa0
+    {
+        info!("GetRequest_PDU_TAG: {:02x} (x)", field.tlvdata);
+    }
+    else
+    {
+        info!("<unknown> type: {:02x} (x), data: {:02x} (x)", field.tlvtype, field.tlvdata);
+    }
+}
+
+#[macro_export]
+macro_rules! TestOrBreak {
+    ( $x:expr ) => {
+        if ($x) == false {
+            break;
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnmpRequest<'a> {
+  pub version: u8,
+  pub tlvdata: &'a [u8],
+}
+
+#[embassy_executor::task]
+async fn snmp_task(stack: &'static Stack<Device>, app_control: AppControl) {
+    let mut rx_buffer = [0; 512];
+    let mut tx_buffer = [0; 512];
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
+    let mut buf = [0; 512];
+    loop {
+        let mut socket = UdpSocket::new(stack, &mut rx_meta, &mut rx_buffer, &mut tx_meta, &mut tx_buffer);
+        socket.bind(161).unwrap();
+
+        loop {
+            let (n, ep) = socket.recv_from(&mut buf).await.unwrap();
+
+
+            if let Ok(s) = core::str::from_utf8(&buf[..n]) {
+                info!("rxd from {}: {}", ep, s);
+            }
+            else {
+                info!("rxd from {} (Undecodable)", ep);
+            }
+
+            info!("buf length: {} octets", n);
+
+            let (mut nextbuf, mut r) = tlv(&buf).unwrap();
+
+            info!("Top level ASN Sequence:");
+            print_field(&r);
+
+            // Sequence: Table-2 in https://www.ranecommercial.com/legacy/pdf/ranenotes/SNMP_Simple_Network_Management_Protocol.pdf
+
+
+            /* SNMP Version Integer */
+            (nextbuf, r) = tlv(r.tlvdata).unwrap();
+            print_field(&r);
+
+            // Sanity Checks
+            TestOrBreak!(r.tlvtype == 0x02);
+            TestOrBreak!(r.tlvdata.len() == 1);
+
+            let snmp_version = r.tlvdata[0];
+
+
+            /* SNMP Community String */
+            (nextbuf, r) = tlv(nextbuf).unwrap();
+            print_field(&r);
+
+            // Sanity Checks
+            TestOrBreak!(r.tlvtype == 0x04);
+            TestOrBreak!(r.tlvdata.len() > 1);
+
+            if let Ok(snmp_community) = core::str::from_utf8(&r.tlvdata) {
+                info!("Community: {}", snmp_community);
+            }
+            else {
+                break;
+            }
+
+
+            /* SNMP PDU */
+            (nextbuf, r) = tlv(nextbuf).unwrap();
+            print_field(&r);
+
+            // Sanity Checks
+            TestOrBreak!(r.tlvtype == 0xa0 || r.tlvtype == 0xa3); // 0xa0 = GetRequest, 0xa3 = SetRequest
+            TestOrBreak!(r.tlvdata.len() >= 4);
+
+                /* Request ID */
+                (nextbuf, r) = tlv(r.tlvdata).unwrap();
+                print_field(&r);
+
+                // Sanity Checks
+                TestOrBreak!(r.tlvtype == 0x02);
+                TestOrBreak!(r.tlvdata.len() == 4);
+
+                let request_id = u32::from_be_bytes(r.tlvdata.try_into().unwrap());
+
+
+                /* Error */
+                (nextbuf, r) = tlv(nextbuf).unwrap();
+                print_field(&r);
+
+                // Sanity Checks
+                TestOrBreak!(r.tlvtype == 0x02);
+                TestOrBreak!(r.tlvdata.len() == 1);
+
+                let request_error = r.tlvdata[0];
+
+
+                /* Error Index */
+                (nextbuf, r) = tlv(nextbuf).unwrap();
+                print_field(&r);
+
+                // Sanity Checks
+                TestOrBreak!(r.tlvtype == 0x02);
+                TestOrBreak!(r.tlvdata.len() == 1);
+
+                let request_error_index = r.tlvdata[0];
+
+
+                /* Varbind List Sequence */
+                (nextbuf, r) = tlv(nextbuf).unwrap();
+                print_field(&r);
+
+                // Sanity Checks
+                TestOrBreak!(r.tlvtype == 0x30);
+                TestOrBreak!(r.tlvdata.len() >= 4);
+
+
+                    /* OID */
+                    (nextbuf, r) = tlv(r.tlvdata).unwrap();
+                    print_field(&r);
+
+                    // Sanity Checks
+                    TestOrBreak!(r.tlvtype == 0x30);
+                    TestOrBreak!(r.tlvdata.len() >= 2);
+
+                        /* OID */
+                        (nextbuf, r) = tlv(r.tlvdata).unwrap();
+                        print_field(&r);
+
+                        // Sanity Checks
+                        TestOrBreak!(r.tlvtype == 0x06);
+                        TestOrBreak!(r.tlvdata.len() >= 1);
+
+                        // OID Encoding: https://learn.microsoft.com/en-gb/windows/win32/seccertenroll/about-object-identifier?redirectedfrom=MSDN
+
+                        info!("Decode complete!");
+
+                        /* Value (NULL TAG) */
+                        //(nextbuf, r) = tlvnull(nextbuf).unwrap();
+                        //print_field(&r);
+
+                        // Sanity Checks
+                        //TestOrBreak!(r.tlvtype != 0x05);
+                        //TestOrBreak!(r.tlvdata.len() < 2);
+
+            
+            socket.send_to(&buf[..n], ep).await.unwrap();
+        }
+    }
+}
+
+// Testing: snmpget -v2c -c public 192.168.110.102 iso.3.6.1
+
+
+// SNMP parsing: https://stackoverflow.com/a/23007993
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagType {
+  Integer,
+  String,
+  OID,
+  List,
+}
+
+fn tag_type(input: &[u8]) -> IResult<&[u8], TagType> {
+  map_res(be_u8, |tag_type| {
+    Ok::<TagType, _>(match tag_type {
+      0x02 => TagType::Integer,
+      0x04 => TagType::String,
+      0x06 => TagType::OID,
+      0x30 => TagType::List,
+      _ => return Err(Err::Error(Error::new(input, ErrorKind::Alt))),
+    })
+  })(input)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlvTag<'a> {
+  pub tlvtype: u8,
+  pub tlvdata: &'a [u8],
+}
+
+
+pub fn tlv(input: &[u8]) -> IResult<&[u8], TlvTag> {
+  map(
+      tuple((
+        be_u8,
+        length_data(be_u8),
+      )),
+      move |(tag_type, data)| TlvTag {
+        tlvtype: tag_type,
+        tlvdata: data,
+      },
+    )(input)
+}
+
+/*
+pub fn tlvnull(input: &[u8]) -> IResult<&[u8], TlvTag> {
+  map(
+      tuple((
+        be_u8,
+        be_u8,
+      )),
+      move |(tag_type, data)| TlvTag {
+        tlvtype: tag_type,
+        tlvdata: [data],
+      },
+    )(input)
+}
+*/
+
+/*
+fn req_parser(input: &[u8]) -> IResult<&[u8], [TLV_Tag; 2]> {
+  let mut buf = [TLV_Tag { }, TLV_Tag { }];
+  let (rest, ()) = fill(tlv, &mut buf)(input)?;
+  Ok((rest, buf))
+}
+*/
+
 type AppRouter = impl picoserve::routing::PathRouter<PicoserveAppControl>;
 
 const WEB_TASK_POOL_SIZE: usize = 8;
 const NTP_TASK_POOL_SIZE: usize = 1;
-const NET_TASK_POOL_SIZE: usize = WEB_TASK_POOL_SIZE + NTP_TASK_POOL_SIZE + 1; // all above + 1
+const SNMP_TASK_POOL_SIZE: usize = 1;
+const NET_TASK_POOL_SIZE: usize = WEB_TASK_POOL_SIZE + NTP_TASK_POOL_SIZE + SNMP_TASK_POOL_SIZE + 1; // all above + 1
 
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 async fn web_task(
@@ -427,6 +706,9 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(sntp_task(stack, app_control)).unwrap();
     info!("SNTP Task started.");
+
+    spawner.spawn(snmp_task(stack, app_control)).unwrap();
+    info!("SNMP Task started.");
 
     for id in 0..WEB_TASK_POOL_SIZE {
         spawner.must_spawn(web_task(
