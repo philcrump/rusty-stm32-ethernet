@@ -41,13 +41,13 @@ printf_nv() {
 #device_ram=$((112*1024)) # Main bank
 #device_flash=$((1024*1024))
 
-device_name="STM32F767ZI"
-device_ram=$((1*512*1024)) # Main bank
-device_flash=$((1*1024*1024)) # First bank
-
-#device_name="STM32H753ZI"
+#device_name="STM32F767ZI"
 #device_ram=$((1*512*1024)) # Main bank
 #device_flash=$((1*1024*1024)) # First bank
+
+device_name="STM32H753ZI"
+device_ram=$((1*512*1024)) # Main bank
+device_flash=$((1*1024*1024)) # First bank
 
 size_binary() {
   size=`arm-none-eabi-size -A -d $1`;

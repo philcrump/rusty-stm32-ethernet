@@ -14,7 +14,7 @@ use embassy_stm32::eth::{Ethernet, PacketQueue};
 use embassy_stm32::peripherals::ETH;
 //use embassy_stm32::rng::Rng;
 use embassy_stm32::time::Hertz;
-use embassy_stm32::adc::{Adc, SampleTime::Cycles480};
+use embassy_stm32::adc::{Adc, SampleTime};
 use embassy_stm32::gpio::{Input, Level, Output, Speed, AnyPin, Pull};
 //use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::Peripheral;
@@ -137,28 +137,28 @@ async fn blink_network(pin: embassy_stm32::PeripheralRef<'static, AnyPin>, stack
 }
 
 #[embassy_executor::task]
-async fn adc1_task(adc_instance: embassy_stm32::peripherals::ADC1) {
+async fn adc3_task(adc_instance: embassy_stm32::peripherals::ADC3) {
 
     // STM32H7 ADC Cal pointers
-    //let ts_cal1_ptr = 0x1FF1E820 as *const u16;
-    //let ts_cal2_ptr = 0x1FF1E840 as *const u16;
+    let ts_cal1_ptr = 0x1FF1E820 as *const u16;
+    let ts_cal2_ptr = 0x1FF1E840 as *const u16;
 
     // STM32F7 ADC Cal pointers
-    let ts_cal1_ptr = 0x1FF0F44C as *const u16;
-    let ts_cal2_ptr = 0x1FF0F44E as *const u16;
+    //let ts_cal1_ptr = 0x1FF0F44C as *const u16;
+    //let ts_cal2_ptr = 0x1FF0F44E as *const u16;
 
     let adc_ts_cal1 = unsafe { *ts_cal1_ptr };
     let adc_ts_cal2 = unsafe { *ts_cal2_ptr };
 
     // MCU Temperature Sensor
     let mut adc = Adc::new(adc_instance, &mut Delay);
-    adc.set_sample_time(Cycles480);
+    adc.set_sample_time(SampleTime::Cycles810_5);
     let mut mcu_temp = adc.enable_temperature();
 
     let mut new_temperature_mcu: f32;
 
     loop {
-        new_temperature_mcu = ((110.0-30.0) / f32::from(adc_ts_cal2 - adc_ts_cal1)) * f32::from(adc.read(&mut mcu_temp) - adc_ts_cal1) + 30.0;
+        new_temperature_mcu = ((110.0-30.0) / f32::from(adc_ts_cal2 - adc_ts_cal1)) * f32::from(adc.read_internal(&mut mcu_temp) - adc_ts_cal1) + 30.0;
 
         APP_VALUES.temperature_mcu.store(new_temperature_mcu as u16, Ordering::Relaxed); 
 
@@ -231,18 +231,18 @@ async fn main(spawner: Spawner) {
             freq: Hertz(8_000_000),
             mode: HseMode::Bypass, // Nucleo feeds main MCU from Debug MCU
         });
-        config.rcc.pll_src = PllSource::HSE;
-        config.rcc.pll = Some(Pll {
+        config.rcc.hsi = Some(HSIPrescaler::DIV1);
+        config.rcc.csi = true;
+        config.rcc.hsi48 = Some(Default::default()); // needed for RNG
+        config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSI,
             prediv: PllPreDiv::DIV4,
-            mul: PllMul::MUL216,
-            divp: Some(PllPDiv::DIV2), // 8mhz / 4 * 216 / 2 = 216MHz, F767ZI top speed.
+            mul: PllMul::MUL50,
+            divp: Some(PllDiv::DIV2),
             divq: None,
             divr: None,
         });
-        config.rcc.ahb_pre = AHBPrescaler::DIV1;
-        config.rcc.apb1_pre = APBPrescaler::DIV4;
-        config.rcc.apb2_pre = APBPrescaler::DIV2;
-        config.rcc.sys = Sysclk::PLL1_P;
+        config.rcc.sys = Sysclk::PLL1_P; // 400 Mhz
         config.rcc.ls = LsConfig {
             rtc: RtcClockSource::LSE,
             lsi: false,
@@ -251,11 +251,17 @@ async fn main(spawner: Spawner) {
                 mode: LseMode::Oscillator(LseDrive::MediumHigh),
             })
         };
+        config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 Mhz
+        config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 Mhz
+        config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 Mhz
+        config.rcc.apb3_pre = APBPrescaler::DIV2; // 100 Mhz
+        config.rcc.apb4_pre = APBPrescaler::DIV2; // 100 Mhz
+        config.rcc.voltage_scale = VoltageScale::Scale1;
     }
     let p = embassy_stm32::init(config);
 
     // Set up watchdog
-    let mut watchdog = embassy_stm32::wdg::IndependentWatchdog::new(p.IWDG, 30*1000*1000); // 30 seconds, to allow bootup
+    let mut watchdog = embassy_stm32::wdg::IndependentWatchdog::new(p.IWDG1, 30*1000*1000); // 30 seconds, to allow bootup
     // Start watchdog
     watchdog.unleash();
     watchdog.pet();
@@ -265,7 +271,7 @@ async fn main(spawner: Spawner) {
     // Heartbeat LED Blinker
     spawner.spawn(blink_heartbeat(AnyPin::from(p.PB0).into_ref())).unwrap();
 
-    spawner.spawn(adc1_task(p.ADC1)).unwrap();
+    spawner.spawn(adc3_task(p.ADC3)).unwrap();
     info!("MCU Temperature task started.");
 
     // RTC
@@ -311,7 +317,7 @@ async fn main(spawner: Spawner) {
     );
 
     let mut dhcp_config = DhcpConfig::default();
-    dhcp_config.hostname = Some(heapless::String::try_from("stm32f7-rusty").unwrap());
+    dhcp_config.hostname = Some(heapless::String::try_from("stm32h7-rusty").unwrap());
     let net_config = embassy_net::Config::dhcpv4(dhcp_config);
 
     //let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
@@ -333,7 +339,7 @@ async fn main(spawner: Spawner) {
     // Launch network task
     spawner.spawn(net_task(stack)).unwrap();
 
-    spawner.spawn(blink_network(AnyPin::from(p.PB7).into_ref(), stack)).unwrap();
+    spawner.spawn(blink_network(AnyPin::from(p.PE1).into_ref(), stack)).unwrap();
 
     info!("Network initialised..");
 
