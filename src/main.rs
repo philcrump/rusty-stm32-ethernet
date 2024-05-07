@@ -236,13 +236,13 @@ async fn main(spawner: Spawner) {
         config.rcc.hsi48 = Some(Default::default()); // needed for RNG
         config.rcc.pll1 = Some(Pll {
             source: PllSource::HSI,
-            prediv: PllPreDiv::DIV4,
-            mul: PllMul::MUL50,
-            divp: Some(PllDiv::DIV2),
-            divq: None,
+            prediv: PllPreDiv::DIV8,
+            mul: PllMul::MUL120,
+            divp: Some(PllDiv::DIV2), // ((64/8)*120)/2 = 480MHz
+            divq: Some(PllDiv::DIV8), // ((64/8)*120)/8 = 120MHz / SPI1 cksel defaults to pll1_q
             divr: None,
         });
-        config.rcc.sys = Sysclk::PLL1_P; // 400 Mhz
+        config.rcc.sys = Sysclk::PLL1_P; // 480 Mhz
         config.rcc.ls = LsConfig {
             rtc: RtcClockSource::LSE,
             lsi: false,
@@ -251,12 +251,12 @@ async fn main(spawner: Spawner) {
                 mode: LseMode::Oscillator(LseDrive::MediumHigh),
             })
         };
-        config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 Mhz
-        config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 Mhz
-        config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 Mhz
-        config.rcc.apb3_pre = APBPrescaler::DIV2; // 100 Mhz
-        config.rcc.apb4_pre = APBPrescaler::DIV2; // 100 Mhz
-        config.rcc.voltage_scale = VoltageScale::Scale1;
+        config.rcc.ahb_pre = AHBPrescaler::DIV2; // 220 Mhz
+        config.rcc.apb1_pre = APBPrescaler::DIV2; // 110 Mhz
+        config.rcc.apb2_pre = APBPrescaler::DIV2; // 110 Mhz
+        config.rcc.apb3_pre = APBPrescaler::DIV2; // 110 Mhz
+        config.rcc.apb4_pre = APBPrescaler::DIV2; // 110 Mhz
+        config.rcc.voltage_scale = VoltageScale::Scale0; // Not valid for Silicon Rev Y,W, needs Rev V,X
     }
     let p = embassy_stm32::init(config);
 
