@@ -5,7 +5,8 @@ This repository is currently used for education and experimentation of STM32 Emb
 Other notable libraries used include:
 * [picoserve HTTP server](https://github.com/sammhicks/picoserve)
 
-The current hardware target is an [ST NUCLEO-F767ZI](https://www.st.com/en/evaluation-tools/nucleo-f767zi.html) development board. 
+The current hardware target is an [ST NUCLEO-H753ZI](https://www.st.com/en/evaluation-tools/nucleo-h753zi.html) development board. 
+* 480MHz clock with VS0 state is used, requiring later silicon revision of V or X.
 
 ## Dependencies
 
