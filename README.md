@@ -17,8 +17,10 @@ The current hardware target is an [ST NUCLEO-H753ZI](https://www.st.com/en/evalu
 Nightly is currently required for make_static trait macros in picoserve
 
 ```bash
+rustup install nightly-2024-06-01
+cargo +nightly-2024-06-01
+rustup +nightly-2024-06-01 target add thumbv7em-none-eabihf
 rustup default nightly
-rustup +nightly target add thumbv7em-none-eabihf
 ```
 
 ### probe-rs

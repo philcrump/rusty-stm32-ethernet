@@ -5,4 +5,4 @@ cd $source_dir
 
 ./build_htdocs;
 #cargo +nightly flash --connect-under-reset --chip STM32F767ZITx --release;
-cargo +nightly flash --connect-under-reset --chip STM32H753ZITx --release;
+cargo +nightly-2024-06-01 flash --connect-under-reset --chip STM32H753ZITx --release;

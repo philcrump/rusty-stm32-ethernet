@@ -89,7 +89,7 @@ done
 for i in `seq 2 $OPTIND`; do shift; done
 
 ./build_htdocs;
-cargo +nightly build --release \
+cargo +nightly-2024-06-01 build --release \
 && {
   printf "$_INFO_$COLOUR_GREEN Build successful$COLOUR_OFF\n"
 } || {

@@ -4,4 +4,4 @@ source_dir="$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)"
 cd $source_dir
 
 ./build_htdocs;
-cargo +nightly run --release;
+cargo +nightly-2024-06-01 run --release;
