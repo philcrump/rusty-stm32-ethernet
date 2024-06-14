@@ -45,7 +45,6 @@ macro_rules! impl_bytes {
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(C)]
 struct NTPv4 {
     pub version: u8,
