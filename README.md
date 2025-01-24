@@ -18,9 +18,8 @@ Nightly is currently required for make_static trait macros in picoserve
 
 ```bash
 rustup install nightly-2024-06-01
-cargo +nightly-2024-06-01
 rustup +nightly-2024-06-01 target add thumbv7em-none-eabihf
-rustup default nightly
+rustup default nightly-2024-06-01
 ```
 
 ### probe-rs

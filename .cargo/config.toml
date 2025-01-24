@@ -11,4 +11,4 @@ target = "thumbv7em-none-eabihf"
 opt-level = 3 # 3, 2, 1, 0, s, z
 
 [env]
-DEFMT_LOG = "trace"
+DEFMT_LOG = "info"

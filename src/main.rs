@@ -29,6 +29,7 @@ use {defmt_rtt as _, panic_probe as _};
 // Ethernet
 bind_interrupts!(struct Irqs {
     ETH => eth::InterruptHandler;
+    USART2 => embassy_stm32::usart::BufferedInterruptHandler<embassy_stm32::peripherals::USART2>;
 //    HASH_RNG => rng::InterruptHandler<peripherals::RNG>; // No HW crypto in F767
 });
 type Device = Ethernet<'static, ETH, GenericSMI>;
@@ -58,6 +59,91 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 // NTP
 mod sntp;
+
+// 1-Wire
+use embassy_stm32::usart::{BufferedUart};
+
+#[embassy_executor::task]
+async fn onewire_task(
+    usart_instance: embassy_stm32::peripherals::USART2,
+    rxpin: embassy_stm32::PeripheralRef<'static, embassy_stm32::peripherals::PD6>,
+    txpin: embassy_stm32::PeripheralRef<'static, embassy_stm32::peripherals::PD5>
+) {
+
+    let mut onewire_usart_config = embassy_stm32::usart::Config::default();
+    onewire_usart_config.baudrate = 9600;
+    
+    let mut onewire_usart_txbuf = [0u8; 256];
+    let mut onewire_usart_rxbuf = [0u8; 256];
+
+    let mut usart = BufferedUart::new(usart_instance, Irqs, rxpin, txpin, &mut onewire_usart_txbuf, &mut onewire_usart_rxbuf, onewire_usart_config).unwrap();
+
+    loop {
+        for _n in 0u32.. {
+            //use embedded_hal::blocking::serial::Write;
+            use embedded_io_async::{Write, Read};
+            use embassy_time::with_timeout;
+
+            // Set Command Mode, Generate Reset Pulse
+            usart.write_all(&[0xE3, 0xC1]).await.ok();
+
+            let mut rx = [0u8; 16];
+
+            match with_timeout(Duration::from_millis(1000), usart.read(&mut rx)).await
+            {
+                Ok(r) => {
+                    info!("Read USART {:?},{:?}", r, rx);
+                    info!("1wire response: {:?}, chip rev: {:?}", rx[0] & 0x3, rx[0] & 0x1c);
+
+                    if rx[0] & 0x3 == 0x03
+                    {
+                        info!("Reset pulse detected no device");
+                    }
+                    else if rx[0] & 0x3 == 0x01
+                    {
+                        info!("Reset pulse detected device[s]");
+
+                        // Set Data mode, Search ROM
+                        usart.write_all(&[0xE1, 0xF0]).await.ok();
+
+                        // Read back F0 response
+                        let _r = usart.read(&mut rx).await.ok();
+
+                        // Set Command mode, Search accelerator on
+                        usart.write_all(&[0xE3, 0xB1]).await.ok();
+
+
+
+                        // Set Data mode, send data byte
+                        usart.write_all(&[0xE1, 0x91, 0x01]).await.ok();
+
+                        // Read back search response
+                        let rc = usart.read(&mut rx).await.ok();
+                        info!("Search USART {:?},{:?}", rc, rx);
+
+                        
+
+                        // Set Command Mode, Search accelerator off
+                        usart.write_all(&[0xE3, 0xA1]).await.ok();
+                    }
+                    else
+                    {
+                        warn!("Unknown response from Reset pulse.");
+                    }
+                }
+                Err(_) => {
+                    // Timed out
+                    warn!("1wire USART timed out.");
+                }
+            };
+            
+
+            Timer::after_millis(1000).await;
+        };
+
+        Timer::after_millis(5000).await;
+    }
+}
 
 
 // GPIO
@@ -158,7 +244,17 @@ async fn adc3_task(adc_instance: embassy_stm32::peripherals::ADC3) {
     let mut new_temperature_mcu: f32;
 
     loop {
+        info!("adc_ts_cal1: {:?}", adc_ts_cal1);
+        info!("adc_ts_cal2: {:?}", adc_ts_cal2);
+        info!("Raw MCU Temp: {:?}", adc.read_internal(&mut mcu_temp));
+
+        info!("Cal division: {:?}", ((110.0-30.0) / f32::from(adc_ts_cal2 - adc_ts_cal1)));
+
+        info!("Sensor minus: {:?}", f32::from(adc.read_internal(&mut mcu_temp) - adc_ts_cal1));
+
         new_temperature_mcu = ((110.0-30.0) / f32::from(adc_ts_cal2 - adc_ts_cal1)) * f32::from(adc.read_internal(&mut mcu_temp) - adc_ts_cal1) + 30.0;
+
+        info!("## Computed MCU Temp: {:?}", new_temperature_mcu);
 
         APP_VALUES.temperature_mcu.store(new_temperature_mcu as u16, Ordering::Relaxed); 
 
@@ -266,13 +362,16 @@ async fn main(spawner: Spawner) {
     watchdog.unleash();
     watchdog.pet();
 
-    info!("Hello World!");
+    warn!("#### Board booted, Hello World!");
 
     // Heartbeat LED Blinker
     spawner.spawn(blink_heartbeat(AnyPin::from(p.PB0).into_ref())).unwrap();
 
     spawner.spawn(adc3_task(p.ADC3)).unwrap();
     info!("MCU Temperature task started.");
+
+    spawner.spawn(onewire_task(p.USART2, p.PD6.into_ref(), p.PD5.into_ref())).unwrap();
+    info!("1-wire task started.");
 
     // RTC
     let mut rtc: Rtc = Rtc::new(p.RTC, RtcConfig::default());
